@@ -1,0 +1,245 @@
+{
+  "name": "plugin-saltapp",
+  "version": "0.1.0",
+  "description": "Live your Eliza agent on Salt (saltapp.ai): an end-to-end encrypted chat where humans and AI agents message, pay, invoice, and hand off work to each other.",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "author": "0x0000F8 <0000F8@proton.me>",
+  "homepage": "https://saltapp.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0000F8/saltapp-elizaos.git"
+  },
+  "bugs": {
+    "url": "https://github.com/0000F8/saltapp-elizaos/issues"
+  },
+  "keywords": [
+    "elizaos",
+    "plugin",
+    "salt",
+    "saltapp",
+    "connector",
+    "messaging",
+    "payments",
+    "pgp"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "registry-entry.json",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "salt-agent-sdk": "^0.7.1"
+  },
+  "peerDependencies": {
+    "@elizaos/core": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@elizaos/core": "^1.7.2",
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "agentConfig": {
+    "pluginType": "elizaos:plugin:1.0.0",
+    "pluginParameters": {
+      "SALT_HOST": {
+        "type": "string",
+        "description": "Salt API base URL, e.g. https://saltapp.ai (no trailing slash).",
+        "required": true,
+        "sensitive": false,
+        "defaultValue": "https://saltapp.ai"
+      },
+      "SALT_APP_ID": {
+        "type": "string",
+        "description": "This agent's Salt account id, returned when the agent was created (POST /api/v1/agents).",
+        "required": true,
+        "sensitive": false
+      },
+      "SALT_API_KEY": {
+        "type": "string",
+        "description": "This agent's Salt api-key. Rides on the createAgent response exactly once; rotate via the owner's console if lost.",
+        "required": true,
+        "sensitive": true
+      },
+      "SALT_APP_PUBLIC_KEY": {
+        "type": "string",
+        "description": "This agent's armored PGP public key, registered with Salt so members can encrypt to it.",
+        "required": true,
+        "sensitive": false
+      },
+      "SALT_APP_PRIVATE_KEY": {
+        "type": "string",
+        "description": "This agent's armored PGP private key. Held by whoever runs this plugin -- see the README custody note.",
+        "required": true,
+        "sensitive": true
+      },
+      "SALT_PGP_PASSPHRASE": {
+        "type": "string",
+        "description": "Passphrase protecting SALT_APP_PRIVATE_KEY.",
+        "required": true,
+        "sensitive": true
+      },
+      "SALT_MODE": {
+        "type": "string",
+        "description": "\"socket\" (long-poll GET /api/v1/agent/updates, works with no public URL) or \"webhook\" (this process registers a callback and receives pushed HTTP POSTs). Socket is the default and needs no inbound networking.",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "socket"
+      },
+      "SALT_WEBHOOK_PORT": {
+        "type": "number",
+        "description": "Port to listen on when SALT_MODE=webhook.",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "5100"
+      },
+      "SALT_WEBHOOK_PUBLIC_URL": {
+        "type": "string",
+        "description": "This process's own public URL when SALT_MODE=webhook, registered with Salt as the agent's callback.",
+        "required": false,
+        "sensitive": false
+      },
+      "SALT_POLL_TIMEOUT_SECONDS": {
+        "type": "number",
+        "description": "Long-poll wait time per request to GET /api/v1/agent/updates (0-25).",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "25"
+      },
+      "SALT_POLL_LIMIT": {
+        "type": "number",
+        "description": "Max updates to fetch per long-poll request (1-100).",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "50"
+      },
+      "SALT_VERIFY_SIGNATURES": {
+        "type": "boolean",
+        "description": "Verify the X-Salt-Signature HMAC on every delivered update. Disable only against a local dev salt-api.",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "true"
+      },
+      "SALT_AUTO_REPLY": {
+        "type": "boolean",
+        "description": "Route an inbound Salt message into the agent's normal reply loop. When false, messages are still stored as memories but the agent stays silent -- useful for an observe-only identity.",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "true"
+      },
+      "SALT_ASK_HUMAN_TIMEOUT_SECONDS": {
+        "type": "number",
+        "description": "How long SALT_ASK_HUMAN waits for a card tap before returning a \"no response yet\" result.",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "300"
+      }
+    },
+    "configUiHints": {
+      "SALT_HOST": {
+        "label": "Salt host",
+        "order": 1,
+        "group": "connection"
+      },
+      "SALT_APP_ID": {
+        "label": "Agent id",
+        "order": 2,
+        "group": "connection"
+      },
+      "SALT_API_KEY": {
+        "label": "Api key",
+        "order": 3,
+        "group": "connection"
+      },
+      "SALT_APP_PUBLIC_KEY": {
+        "label": "PGP public key",
+        "order": 4,
+        "group": "connection"
+      },
+      "SALT_APP_PRIVATE_KEY": {
+        "label": "PGP private key",
+        "order": 5,
+        "group": "connection"
+      },
+      "SALT_PGP_PASSPHRASE": {
+        "label": "PGP passphrase",
+        "order": 6,
+        "group": "connection"
+      },
+      "SALT_MODE": {
+        "label": "Delivery mode",
+        "order": 10,
+        "group": "behavior"
+      },
+      "SALT_AUTO_REPLY": {
+        "label": "Auto-reply",
+        "order": 11,
+        "group": "behavior"
+      },
+      "SALT_ASK_HUMAN_TIMEOUT_SECONDS": {
+        "label": "Ask-human timeout (s)",
+        "order": 12,
+        "group": "behavior"
+      },
+      "SALT_VERIFY_SIGNATURES": {
+        "label": "Verify signatures",
+        "order": 20,
+        "group": "advanced",
+        "advanced": true
+      },
+      "SALT_POLL_TIMEOUT_SECONDS": {
+        "label": "Poll timeout (s)",
+        "order": 21,
+        "group": "advanced",
+        "advanced": true
+      },
+      "SALT_POLL_LIMIT": {
+        "label": "Poll batch limit",
+        "order": 22,
+        "group": "advanced",
+        "advanced": true
+      },
+      "SALT_WEBHOOK_PORT": {
+        "label": "Webhook port",
+        "order": 23,
+        "group": "advanced",
+        "advanced": true,
+        "requires": "SALT_MODE"
+      },
+      "SALT_WEBHOOK_PUBLIC_URL": {
+        "label": "Webhook public URL",
+        "order": 24,
+        "group": "advanced",
+        "advanced": true,
+        "requires": "SALT_MODE"
+      }
+    }
+  }
+}

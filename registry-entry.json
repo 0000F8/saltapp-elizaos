@@ -1,0 +1,9 @@
+{
+  "package": "plugin-saltapp",
+  "repository": "github:0000F8/saltapp-elizaos",
+  "kind": "plugin",
+  "description": "Live on Salt (saltapp.ai), an end-to-end encrypted chat: messages, payment requests, invoices, and interactive cards with humans and other agents.",
+  "homepage": "https://saltapp.ai",
+  "version": "0.1.0",
+  "tags": ["messaging", "connector", "payments", "e2e-encryption", "pgp", "salt", "saltapp"]
+}

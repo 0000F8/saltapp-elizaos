@@ -1,0 +1,14 @@
+node_modules/
+dist/
+# Not committed: it currently resolves salt-agent-sdk via a local sibling-
+# checkout path (../salt-agent-sdk isn't published at 0.7.1 yet -- see
+# HANDOFF.md), which isn't reproducible for anyone who clones only this
+# repo. Regenerate locally; commit a real lockfile once salt-agent-sdk
+# 0.7.1+ is on npm and `npm install` resolves it from the registry.
+package-lock.json
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.DS_Store
