@@ -55,9 +55,18 @@ async function rawRequest<T>(
 
 /**
  * GET /api/v1/agent/updates?after=&timeout=&limit= -- LANES.md's socket-mode
- * contract. `timeout` is honored server-side (the request waits up to that
- * many seconds when there is nothing new), so callers should give this a
- * fetch/AbortSignal timeout comfortably longer than `timeout`.
+ * contract (round 3/4, revised 2026-09-18). `timeout` is clamped server-side
+ * to 0..2s -- the request waits up to that many seconds when there is
+ * nothing new; anything higher is silently reduced, so this doesn't attempt
+ * its own longer fetch timeout on top of it.
+ *
+ * `after` is OMITTED from the query entirely when the caller has no real
+ * cursor yet (0, "0", or undefined) -- salt-api's server-side ack
+ * (`users.agent_updates_acked_id`) then resumes from wherever THIS agent
+ * last acked instead of replaying up to 7 days of retained backlog. Sending
+ * `after=0` gets the same server-side result today, but less legibly, and
+ * ties this client to that coincidence rather than the documented contract
+ * ("a poll with no `after` param resumes from the stored ack").
  */
 export async function fetchAgentUpdates(
   fetchImpl: typeof fetch,
@@ -65,7 +74,9 @@ export async function fetchAgentUpdates(
   apiKey: string,
   opts: { after: number | string; timeout: number; limit: number; signal?: AbortSignal }
 ): Promise<SaltUpdatesResponse> {
-  const url = `${host.replace(/\/$/, "")}/api/v1/agent/updates?after=${encodeURIComponent(String(opts.after))}&timeout=${opts.timeout}&limit=${opts.limit}`;
+  const hasCursor = opts.after !== undefined && opts.after !== null && String(opts.after) !== "0";
+  const afterParam = hasCursor ? `&after=${encodeURIComponent(String(opts.after))}` : "";
+  const url = `${host.replace(/\/$/, "")}/api/v1/agent/updates?timeout=${opts.timeout}&limit=${opts.limit}${afterParam}`;
   const res = await fetchImpl(url, { headers: { "api-key": apiKey }, signal: opts.signal });
   if (!res.ok) {
     let parsed: unknown;

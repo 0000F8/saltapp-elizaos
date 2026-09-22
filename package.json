@@ -49,7 +49,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "salt-agent-sdk": "^0.7.1"
+    "salt-agent-sdk": "^0.8.0"
   },
   "peerDependencies": {
     "@elizaos/core": ">=1.0.0"
@@ -128,10 +128,10 @@
       },
       "SALT_POLL_TIMEOUT_SECONDS": {
         "type": "number",
-        "description": "Long-poll wait time per request to GET /api/v1/agent/updates (0-25).",
+        "description": "Short-poll wait time per request to GET /api/v1/agent/updates, clamped server-side to 0-2s (round-4 socket contract: Action Cable is the real push path, this is only the adaptive fallback/catch-up poll).",
         "required": false,
         "sensitive": false,
-        "defaultValue": "25"
+        "defaultValue": "2"
       },
       "SALT_POLL_LIMIT": {
         "type": "number",

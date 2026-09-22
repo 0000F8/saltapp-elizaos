@@ -21,7 +21,21 @@ import {
   type Memory,
   type UUID,
 } from "@elizaos/core";
-import { createSaltClient, decrypt, encryptFor, type SaltClient, type SaltUser } from "salt-agent-sdk";
+import {
+  createSaltClient,
+  decrypt,
+  encryptFor,
+  FileCursorStore,
+  FileDedupeStore,
+  MemoryCursorStore,
+  MemoryDedupeStore,
+  ACTIVE_POLL_DELAY_MS,
+  IDLE_POLL_DELAY_MS,
+  type CursorStore,
+  type DedupeStore,
+  type SaltClient,
+  type SaltUser,
+} from "salt-agent-sdk";
 import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config";
 import {
   isGroupChat,
@@ -48,6 +62,13 @@ const ERROR_BACKOFF_MS = 3000;
 
 export interface SaltServiceDeps {
   fetchImpl?: typeof fetch;
+  /** Override where the poll cursor persists (default: salt-agent-sdk's
+   *  FileCursorStore(saltConfig.stateDir), resolved once connect() knows
+   *  the config). Tests pass MemoryCursorStore() to opt out of disk I/O. */
+  cursorStore?: CursorStore;
+  /** Override where processed delivery ids persist (default:
+   *  FileDedupeStore(saltConfig.stateDir)). Same reasoning as cursorStore. */
+  dedupeStore?: DedupeStore;
 }
 
 export class SaltService extends Service {
@@ -61,10 +82,19 @@ export class SaltService extends Service {
   webhookSecret: string | undefined;
   private running = false;
   private cursor: number | string = 0;
+  /** Persists the poll cursor across restarts (salt-agent-sdk's
+   *  FileCursorStore, keyed under saltConfig.stateDir) -- see connect().
+   *  Not `private`: tests inject MemoryCursorStore() directly. */
+  cursorStore: CursorStore = MemoryCursorStore();
+  /** Persists processed delivery ids across restarts, same reasoning as
+   *  cursorStore -- a lost/never-loaded cursor used to replay up to 7 days
+   *  of outbox on every restart and re-answer old messages (see HANDOFF.md). */
+  dedupeStore: DedupeStore = MemoryDedupeStore();
   private pollAbort: AbortController | undefined;
   private loopPromise: Promise<void> | undefined;
   /** Public so action handlers (rest.ts helpers) reuse the same injected fetch in tests. */
   readonly fetchImpl: typeof fetch;
+  private readonly deps: SaltServiceDeps;
 
   /** roomId (elizaOS UUID) -> chat context, read by SALT_CHAT_CONTEXT and the money actions. */
   readonly chatContext = new Map<UUID, SaltChatContextEntry>();
@@ -74,6 +104,9 @@ export class SaltService extends Service {
   constructor(runtime?: IAgentRuntime, deps: SaltServiceDeps = {}) {
     super(runtime);
     this.fetchImpl = deps.fetchImpl ?? fetch;
+    this.deps = deps;
+    if (deps.cursorStore) this.cursorStore = deps.cursorStore;
+    if (deps.dedupeStore) this.dedupeStore = deps.dedupeStore;
   }
 
   static async start(runtime: IAgentRuntime): Promise<SaltService> {
@@ -105,6 +138,14 @@ export class SaltService extends Service {
         // deployed yet (this plugin was built against LANES.md's contract).
         logger.warn(`plugin-saltapp: PATCH /api/v1/agents/delivery failed (continuing; a blank callback already defaults to socket mode): ${err instanceof Error ? err.message : String(err)}`);
       }
+      // Blocking follow-up fixed here: on restart this used to long-poll
+      // from an in-memory cursor of 0 and replay up to 7 days of outbox,
+      // re-answering old messages (see HANDOFF.md). File-backed by default
+      // so a restart resumes where this identity left off; a caller that
+      // passed its own cursorStore/dedupeStore via SaltServiceDeps (tests,
+      // or a host with its own persistence convention) keeps that instead.
+      this.cursorStore = this.deps.cursorStore ?? FileCursorStore(this.saltConfig.stateDir);
+      this.dedupeStore = this.deps.dedupeStore ?? FileDedupeStore(this.saltConfig.stateDir);
       this.running = true;
       this.loopPromise = this.pollLoop();
     } else {
@@ -125,6 +166,12 @@ export class SaltService extends Service {
   // --- the long-poll loop ---------------------------------------------
 
   private async pollLoop(): Promise<void> {
+    try {
+      this.cursor = await this.cursorStore.get(this.saltConfig.appId);
+    } catch (err) {
+      logger.warn(`plugin-saltapp: loading persisted cursor failed, starting from 0: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let idleDelayMs: number = ACTIVE_POLL_DELAY_MS;
     while (this.running) {
       this.pollAbort = new AbortController();
       try {
@@ -140,15 +187,33 @@ export class SaltService extends Service {
           });
         }
         this.cursor = res.cursor;
+        try {
+          await this.cursorStore.put(this.saltConfig.appId, Number(this.cursor));
+        } catch (err) {
+          logger.warn(`plugin-saltapp: persisting cursor failed (will retry next cycle): ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (!this.running) return;
+        // Adaptive pacing (round-4 socket contract, LANES.md K2): salt-api's
+        // short-poll only ever blocks up to pollTimeoutSeconds (<=2s), so
+        // without a pause here an idle agent would hit the endpoint that
+        // often forever. Poll again soon right after real activity; back
+        // off one step at a time toward IDLE_POLL_DELAY_MS the longer
+        // nothing shows up, snapping back to ACTIVE_POLL_DELAY_MS the
+        // moment something does -- the same constants salt-agent-sdk's own
+        // createSocketClient uses, so a mixed fleet polls at one cadence.
+        idleDelayMs = res.updates.length > 0 ? ACTIVE_POLL_DELAY_MS : Math.min(idleDelayMs + ACTIVE_POLL_DELAY_MS, IDLE_POLL_DELAY_MS);
+        await sleep(idleDelayMs);
       } catch (err) {
         if (!this.running) return;
         logger.warn(`plugin-saltapp: poll failed, retrying: ${err instanceof Error ? err.message : String(err)}`);
         await sleep(ERROR_BACKOFF_MS);
+        idleDelayMs = ACTIVE_POLL_DELAY_MS; // resume at the active cadence once traffic is flowing again
       }
     }
   }
 
-  /** Verifies the envelope's signature, then dispatches by event name. Public for tests. */
+  /** Verifies the envelope's signature and skips an already-processed
+   *  delivery, then dispatches by event name. Public for tests. */
   async routeEnvelope(envelope: SaltUpdateEnvelope): Promise<void> {
     if (this.saltConfig.verifySignatures) {
       const check = verifyEnvelopeSignature({ headers: envelope.headers, body: envelope.body, secret: this.webhookSecret ?? "" });
@@ -157,6 +222,25 @@ export class SaltService extends Service {
         return;
       }
     }
+    if (envelope.delivery_id) {
+      const alreadySeen = await this.dedupeStore.has(this.saltConfig.appId, envelope.delivery_id).catch((err) => {
+        logger.warn(`plugin-saltapp: dedupe lookup for delivery ${envelope.delivery_id} failed: ${err instanceof Error ? err.message : String(err)}`);
+        return false; // fail open -- a lookup failure must not block real delivery
+      });
+      if (alreadySeen) {
+        logger.debug(`plugin-saltapp: skipping already-processed delivery ${envelope.delivery_id}`);
+        return;
+      }
+    }
+    await this.dispatchEnvelope(envelope);
+    if (envelope.delivery_id) {
+      await this.dedupeStore.add(this.saltConfig.appId, envelope.delivery_id).catch((err) => {
+        logger.warn(`plugin-saltapp: recording dedupe for delivery ${envelope.delivery_id} failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
+  }
+
+  private async dispatchEnvelope(envelope: SaltUpdateEnvelope): Promise<void> {
     switch (envelope.event) {
       case "message":
         return this.handleMessageEnvelope(envelope.body);

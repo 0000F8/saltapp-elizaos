@@ -145,10 +145,12 @@ ships:
    up gracefully rather than hanging forever.
 9. Kill and restart the process; confirm it resumes polling from a sane
    cursor rather than either re-processing very old messages or losing ones
-   sent while it was down (the socket lane's outbox retains 7 days — this
-   plugin currently resumes from `cursor: 0` on every restart, which
-   re-delivers the whole 7-day backlog on a cold start; see "Left undone"
-   below).
+   sent while it was down. **Fixed 2026-09-22** (salt-agent-sdk 0.8
+   alignment pass): the cursor and the processed-delivery-id set both now
+   persist to `SALT_STATE_DIR` (`salt-agent-sdk`'s `FileCursorStore`/
+   `FileDedupeStore`, default `./data/salt/<SALT_APP_ID>`), so a restart
+   resumes from where it left off instead of replaying the outbox — see
+   "Left undone" item 2 below, which this closes.
 
 ## What's left undone
 
@@ -165,12 +167,18 @@ Ranked roughly by how soon it matters:
    nobody has pointed a real long-poll request at a real server yet. Once
    the socket lane ships, run the UAT steps above for real before telling
    anyone this plugin works.
-2. **No cursor persistence.** `SaltService.cursor` starts at `0` and lives
-   only in memory — a restart re-fetches the whole 7-day outbox retention
-   window instead of resuming where it left off. Fine for a first cut and
-   for the up-to-200-per-poll batch sizes LANES.md describes, but a
-   production deployment should persist the cursor (a file, a KV row,
-   whatever the host already has) and pass it back in as `after` on boot.
+2. ~~**No cursor persistence.**~~ **FIXED 2026-09-22.** `SaltService` now
+   persists the cursor and delivery-id dedupe set via `salt-agent-sdk`
+   0.8's `FileCursorStore`/`FileDedupeStore` (default directory
+   `SALT_STATE_DIR`, `./data/salt/<SALT_APP_ID>`; inject `MemoryCursorStore()`/
+   `MemoryDedupeStore()` via `SaltServiceDeps` to opt out). `fetchAgentUpdates`
+   also now omits `after` entirely on a fresh cursor (0) so salt-api's own
+   server-side ack applies rather than sending `after=0` — see LANES.md's
+   round-3/4 socket contract. Polling is now adaptive
+   (`ACTIVE_POLL_DELAY_MS`/`IDLE_POLL_DELAY_MS` from `salt-agent-sdk`,
+   ~1s/~5s) and `SALT_POLL_TIMEOUT_SECONDS` defaults to and clamps at 2s
+   (was 25s, a pre-round-4 long-poll assumption salt-api's short-poll
+   endpoint now rejects anyway by clamping server-side).
 3. **`SALT_MODE=webhook` is accepted by settings but not implemented.**
    `SaltService.connect()` throws if you set it. `salt-agent-sdk` already
    has a complete `createWebhookServer` (signature verification, dedup,

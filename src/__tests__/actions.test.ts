@@ -22,6 +22,7 @@ function baseConfig(overrides: Partial<SaltPluginConfig> = {}): SaltPluginConfig
     verifySignatures: true,
     autoReply: true,
     askHumanTimeoutSeconds: 5,
+    stateDir: "/tmp/saltapp-elizaos-test-state",
     ...overrides,
   };
 }

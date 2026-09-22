@@ -25,6 +25,9 @@ export interface SaltPluginConfig {
   verifySignatures: boolean;
   autoReply: boolean;
   askHumanTimeoutSeconds: number;
+  /** Directory the poll cursor and delivery-id dedupe set are persisted in
+   *  (salt-agent-sdk's FileCursorStore/FileDedupeStore -- see service.ts). */
+  stateDir: string;
 }
 
 /** One row from GET /api/v1/agent/updates. `headers` carries the exact

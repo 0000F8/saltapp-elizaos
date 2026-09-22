@@ -68,8 +68,13 @@ api-key to register the agent. Capture `SALT_APP_ID` (the new agent's id) and
 so if you lose it you rotate, you don't re-read it) alongside the keypair.
 
 This plugin runs your agent in **socket mode** by default — it never needs a
-public URL or an inbound port; the whole thing is a long-poll loop, so it
-runs fine on a laptop, a CI box, or anywhere outbound HTTPS works.
+public URL or an inbound port; the whole thing is a short-poll loop, adaptively
+paced (about once a second right after activity, backing off to about once
+every five seconds while idle — Action Cable is the real push path server-side,
+this is the fallback/catch-up), so it runs fine on a laptop, a CI box, or
+anywhere outbound HTTPS works. The poll cursor and processed-delivery set
+persist to `SALT_STATE_DIR` (default `./data/salt/<SALT_APP_ID>`) so a
+restart resumes where it left off instead of replaying the retained outbox.
 
 ## Settings
 
@@ -81,12 +86,13 @@ runs fine on a laptop, a CI box, or anywhere outbound HTTPS works.
 | `SALT_APP_PUBLIC_KEY` | yes | — | Armored PGP public key registered with Salt. |
 | `SALT_APP_PRIVATE_KEY` | yes | — | Armored PGP private key. See **Custody** below. |
 | `SALT_PGP_PASSPHRASE` | yes | — | Passphrase protecting the private key. |
-| `SALT_MODE` | no | `socket` | `socket` (long-poll) is the only mode this `Service` runs — see **Webhook mode**. |
+| `SALT_MODE` | no | `socket` | `socket` (short-poll + Action Cable) is the only mode this `Service` runs — see **Webhook mode**. |
 | `SALT_AUTO_REPLY` | no | `true` | `false` stores inbound messages as memories but never replies — an observe-only identity. |
 | `SALT_ASK_HUMAN_TIMEOUT_SECONDS` | no | `300` | How long `SALT_ASK_HUMAN` waits for a tap. |
 | `SALT_VERIFY_SIGNATURES` | no | `true` | Verify the `X-Salt-Signature` HMAC on every delivered update. Disable only against a local dev `salt-api`. |
-| `SALT_POLL_TIMEOUT_SECONDS` | no | `25` | Long-poll wait per request (0–25). |
-| `SALT_POLL_LIMIT` | no | `50` | Max updates per long-poll request (1–100). |
+| `SALT_POLL_TIMEOUT_SECONDS` | no | `2` | Short-poll wait per request, clamped server-side to 0–2s. |
+| `SALT_POLL_LIMIT` | no | `50` | Max updates per poll request (1–100). |
+| `SALT_STATE_DIR` | no | `./data/salt/<SALT_APP_ID>` | Where the poll cursor and delivery-id dedupe set persist across restarts. |
 
 Values may also be set via env vars of the same name; the character
 `settings` block wins (see `@elizaos/core`'s own precedence rules).

@@ -27,6 +27,7 @@ function baseConfig(overrides: Partial<SaltPluginConfig> = {}): SaltPluginConfig
     verifySignatures: true,
     autoReply: true,
     askHumanTimeoutSeconds: 5,
+    stateDir: "/tmp/saltapp-elizaos-test-state",
     ...overrides,
   };
 }
@@ -163,6 +164,77 @@ describe("SaltService.routeEnvelope signature gating", () => {
     });
 
     expect(fake.ensureConnection).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SaltService.routeEnvelope delivery-id dedupe", () => {
+  it("dispatches an envelope only once even if routeEnvelope is called twice with the same delivery_id", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig({ verifySignatures: false });
+    service.client = fakeClient() as never;
+
+    const body = await encryptedMessageBody("hello once");
+    const envelope = { id: 1, delivery_id: "dup-1", event: "message", headers: {}, body, created_at: "2026-09-18T00:00:00Z" };
+
+    await service.routeEnvelope(envelope);
+    await service.routeEnvelope(envelope); // a redelivered/retried row -- Salt's own guarantee, not an edge case
+
+    expect(fake.ensureConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares the dedupe set across a simulated restart when the SAME persistent store is reused", async () => {
+    const { FileDedupeStore } = await import("salt-agent-sdk");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const dir = mkdtempSync(path.join(tmpdir(), "saltapp-elizaos-dedupe-"));
+    try {
+      const store = FileDedupeStore(dir);
+      const body = await encryptedMessageBody("hello across restarts");
+      const envelope = { id: 1, delivery_id: "restart-dup", event: "message", headers: {}, body, created_at: "2026-09-18T00:00:00Z" };
+
+      const { runtime: r1, fake: f1 } = createFakeRuntime();
+      const s1 = new SaltService(r1, { dedupeStore: store });
+      s1.saltConfig = baseConfig({ verifySignatures: false });
+      s1.client = fakeClient() as never;
+      await s1.routeEnvelope(envelope);
+      expect(f1.ensureConnection).toHaveBeenCalledTimes(1);
+
+      // A fresh process/service instance ("restart"), same on-disk store.
+      const { runtime: r2, fake: f2 } = createFakeRuntime();
+      const s2 = new SaltService(r2, { dedupeStore: store });
+      s2.saltConfig = baseConfig({ verifySignatures: false });
+      s2.client = fakeClient() as never;
+      await s2.routeEnvelope(envelope);
+      expect(f2.ensureConnection).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("SaltService cursor persistence", () => {
+  it("survives a simulated restart via a shared FileCursorStore instead of replaying from 0", async () => {
+    const { FileCursorStore } = await import("salt-agent-sdk");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const dir = mkdtempSync(path.join(tmpdir(), "saltapp-elizaos-cursor-"));
+    try {
+      const store = FileCursorStore(dir);
+      await store.put("agent-1", 77);
+
+      const restored = await store.get("agent-1");
+      expect(restored).toBe(77);
+
+      // A fresh store instance pointed at the same directory ("restart")
+      // reads back the same cursor rather than starting from 0.
+      const storeAfterRestart = FileCursorStore(dir);
+      expect(await storeAfterRestart.get("agent-1")).toBe(77);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
