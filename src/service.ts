@@ -40,6 +40,7 @@ import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config";
 import {
   isGroupChat,
   looksLikePgpMessage,
+  parseDeliveredBecause,
   parseCardInteractionEventBody,
   parseChatOpenedEventBody,
   parseMessageEventBody,
@@ -267,6 +268,7 @@ export class SaltService extends Service {
     const entityId = createUniqueUuid(this.runtime, message.user.id);
     const roomId = createUniqueUuid(this.runtime, saltChatId);
     const worldId = createUniqueUuid(this.runtime, saltChatId);
+    const deliveredBecause = parseDeliveredBecause(message.delivered_because);
 
     const cached = this.chatContext.get(roomId);
     const memberCount = cached?.members.length;
@@ -302,10 +304,13 @@ export class SaltService extends Service {
         // `deliveredBecause` says why an open-room message was delivered
         // to this identity at all ("mention" | "reply" | "keyword" | "all"
         // -- see client.setChatSubscription) when Salt sends it; absent for
-        // an ordinary encrypted chat, and absent until salt-api's own
-        // open-rooms rollout starts sending it on the wire.
+        // an ordinary encrypted chat. parseDeliveredBecause narrows salt-api's
+        // raw string (confirmed against salt-agent-sdk 0.10.1's own
+        // MessageContext.deliveredBecause / DeliveredBecause) so an
+        // unrecognized future value degrades to "unknown reason" instead
+        // of lying about it here.
         encrypted: !isPlaintext,
-        ...(message.delivered_because ? { deliveredBecause: message.delivered_because } : {}),
+        ...(deliveredBecause ? { deliveredBecause } : {}),
         ...(message.reply_to_message_id ? { inReplyTo: createUniqueUuid(this.runtime, String(message.reply_to_message_id)) } : {}),
       },
       createdAt: Date.parse(message.created_at) || Date.now(),

@@ -332,6 +332,18 @@ describe("SaltService.handleMessageEnvelope open rooms", () => {
     expect(coreMessage.content.deliveredBecause).toBe("keyword");
   });
 
+  it("narrows an unrecognized delivered_because value to undefined instead of passing it through", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = fakeClient() as never;
+
+    await service.handleMessageEnvelope(plainMessageBody("hi", { deliveredBecause: "some-future-kind" }));
+
+    const [, coreMessage] = fake.messageService!.handleMessage.mock.calls[0]!;
+    expect(coreMessage.content.deliveredBecause).toBeUndefined();
+  });
+
   it("marks an ordinary encrypted-chat memory's content.encrypted true (no delivered_because)", async () => {
     const { runtime, fake } = createFakeRuntime();
     const service = new SaltService(runtime);
