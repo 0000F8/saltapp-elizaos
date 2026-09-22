@@ -28,6 +28,7 @@ function baseConfig(overrides: Partial<SaltPluginConfig> = {}): SaltPluginConfig
     autoReply: true,
     askHumanTimeoutSeconds: 5,
     stateDir: "/tmp/saltapp-elizaos-test-state",
+    subscriptionKeywords: [],
     ...overrides,
   };
 }
@@ -39,6 +40,8 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
       { id: "user-1", username: "ada", display_name: "Ada", account_type: "User", public_key: humanKeys.publicKey },
     ]),
     postMessage: vi.fn().mockResolvedValue({}),
+    postPlainMessage: vi.fn().mockResolvedValue({}),
+    setChatSubscription: vi.fn().mockResolvedValue({}),
     whoAmI: vi.fn().mockResolvedValue({ agent_id: "agent-1", webhook_secret: "test-secret" }),
     ...overrides,
   };
@@ -283,5 +286,157 @@ describe("SaltService card interactions", () => {
     );
 
     expect(fake.createMemory).toHaveBeenCalledTimes(1);
+  });
+});
+
+function plainMessageBody(text: string, opts: { messageId?: number; senderId?: string; chatId?: string; deliveredBecause?: string; chatEncrypted?: boolean } = {}): string {
+  return JSON.stringify({
+    chat: { id: opts.chatId ?? "chat-1", name: null, encrypted: opts.chatEncrypted ?? false },
+    message: {
+      chat_id: opts.chatId ?? "chat-1",
+      message: text,
+      encrypted: false,
+      ...(opts.deliveredBecause ? { delivered_because: opts.deliveredBecause } : {}),
+      message_id: opts.messageId ?? 1,
+      version: 1,
+      user: { id: opts.senderId ?? "user-1", username: "ada", display_name: "Ada", account_type: "User" },
+      created_at: "2026-09-18T00:00:00Z",
+    },
+  });
+}
+
+describe("SaltService.handleMessageEnvelope open rooms", () => {
+  it("passes an open-room message straight through with no decrypt, and marks the memory unencrypted", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = fakeClient() as never;
+
+    await service.handleMessageEnvelope(plainMessageBody("hello from the open room"));
+
+    expect(fake.ensureConnection).toHaveBeenCalledTimes(1);
+    const [, coreMessage] = fake.messageService!.handleMessage.mock.calls[0]!;
+    expect(coreMessage.content.text).toBe("hello from the open room");
+    expect(coreMessage.content.encrypted).toBe(false);
+  });
+
+  it("threads delivered_because onto the memory content when salt-api sends it", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = fakeClient() as never;
+
+    await service.handleMessageEnvelope(plainMessageBody("bot, what's the weather", { deliveredBecause: "keyword" }));
+
+    const [, coreMessage] = fake.messageService!.handleMessage.mock.calls[0]!;
+    expect(coreMessage.content.deliveredBecause).toBe("keyword");
+  });
+
+  it("narrows an unrecognized delivered_because value to undefined instead of passing it through", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = fakeClient() as never;
+
+    await service.handleMessageEnvelope(plainMessageBody("hi", { deliveredBecause: "some-future-kind" }));
+
+    const [, coreMessage] = fake.messageService!.handleMessage.mock.calls[0]!;
+    expect(coreMessage.content.deliveredBecause).toBeUndefined();
+  });
+
+  it("marks an ordinary encrypted-chat memory's content.encrypted true (no delivered_because)", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = fakeClient() as never;
+
+    await service.handleMessageEnvelope(await encryptedMessageBody("hello from Ada"));
+
+    const [, coreMessage] = fake.messageService!.handleMessage.mock.calls[0]!;
+    expect(coreMessage.content.encrypted).toBe(true);
+    expect(coreMessage.content.deliveredBecause).toBeUndefined();
+  });
+
+  it("posts a reply into an open room via client.postPlainMessage, never PGP-encrypted", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const client = fakeClient({ postPlainMessage: vi.fn().mockResolvedValue({}) });
+    fake.messageService!.handleMessage.mockImplementation(async (_rt, _msg, callback) => {
+      await callback({ text: "the weather here is sunny" });
+      return { didRespond: true, responseMessages: [] };
+    });
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = client as never;
+
+    await service.handleMessageEnvelope(plainMessageBody("bot, what's the weather"));
+
+    expect(client.postPlainMessage).toHaveBeenCalledTimes(1);
+    expect(client.postPlainMessage).toHaveBeenCalledWith("test-api-key", "chat-1", "the weather here is sunny");
+    expect(client.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("ignores a plaintext message addressed (by X-Salt-Agent-Id) to a different identity", async () => {
+    const { runtime, fake } = createFakeRuntime();
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = fakeClient() as never;
+
+    await service.handleMessageEnvelope(plainMessageBody("not for me"), "some-other-agent-id");
+
+    expect(fake.ensureConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe("SaltService interests (open-room subscription)", () => {
+  function chatOpenedBody(opts: { chatEncrypted: boolean }): string {
+    return JSON.stringify({
+      type: "chat_opened",
+      chat: { id: "chat-open-1", name: null, encrypted: opts.chatEncrypted },
+      opened_by: { id: "user-1", username: "ada", display_name: "Ada", account_type: "User" },
+      members: [
+        { id: "agent-1", username: "bot", display_name: "Bot", account_type: "Agent", public_key: "pub" },
+        { id: "user-1", username: "ada", display_name: "Ada", account_type: "User", public_key: "pub2" },
+      ],
+      opened_at: "2026-09-22T00:00:00Z",
+    });
+  }
+
+  it("calls setChatSubscription when this identity is added to an open room and a non-default mode is configured", async () => {
+    const { runtime } = createFakeRuntime();
+    const client = fakeClient({ setChatSubscription: vi.fn().mockResolvedValue({}) });
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig({ subscriptionMode: "keywords", subscriptionKeywords: ["weather", "price"] });
+    service.client = client as never;
+
+    await service.handleChatOpenedEnvelope(chatOpenedBody({ chatEncrypted: false }));
+
+    expect(client.setChatSubscription).toHaveBeenCalledWith("test-api-key", "chat-open-1", {
+      mode: "keywords",
+      keywords: ["weather", "price"],
+    });
+  });
+
+  it("never calls setChatSubscription for an ordinary encrypted chat", async () => {
+    const { runtime } = createFakeRuntime();
+    const client = fakeClient({ setChatSubscription: vi.fn().mockResolvedValue({}) });
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig({ subscriptionMode: "keywords", subscriptionKeywords: ["weather"] });
+    service.client = client as never;
+
+    await service.handleChatOpenedEnvelope(chatOpenedBody({ chatEncrypted: true }));
+
+    expect(client.setChatSubscription).not.toHaveBeenCalled();
+  });
+
+  it("never calls setChatSubscription when no subscriptionMode is configured (the default)", async () => {
+    const { runtime } = createFakeRuntime();
+    const client = fakeClient({ setChatSubscription: vi.fn().mockResolvedValue({}) });
+    const service = new SaltService(runtime);
+    service.saltConfig = baseConfig();
+    service.client = client as never;
+
+    await service.handleChatOpenedEnvelope(chatOpenedBody({ chatEncrypted: false }));
+
+    expect(client.setChatSubscription).not.toHaveBeenCalled();
   });
 });

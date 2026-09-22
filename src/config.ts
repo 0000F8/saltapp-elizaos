@@ -8,7 +8,7 @@
 
 import * as path from "node:path";
 import type { IAgentRuntime } from "@elizaos/core";
-import type { SaltDeliveryMode, SaltPluginConfig } from "./types";
+import type { SaltDeliveryMode, SaltPluginConfig, SaltSubscriptionMode } from "./types";
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
   const n = value === undefined ? Number.NaN : Number.parseInt(value, 10);
@@ -52,25 +52,39 @@ export function loadSaltPluginConfig(runtime: IAgentRuntime): SaltPluginConfig {
     mode,
     webhookPort: clampInt(get("SALT_WEBHOOK_PORT"), 5100, 1, 65535),
     webhookPublicUrl: get("SALT_WEBHOOK_PUBLIC_URL"),
-    // Round-4 socket contract (LANES.md K2, revised 2026-09-18): salt-api
-    // clamps `timeout` server-side to 0..2s regardless of what's sent --
-    // the old 25s default was a pre-H1 long-poll assumption. Sending a
-    // higher value isn't rejected, just wasted on the wire and misleading
-    // to read in logs, so this clamps to what the server will actually
-    // honor rather than relying on the server alone to correct it.
+    // Vestigial as of the Action Cable transport (socket.ts): the service
+    // no longer polls, so there is no per-request wait to bound any more.
+    // Kept (parsed, clamped, never referenced) purely so a host that
+    // already set SALT_POLL_TIMEOUT_SECONDS doesn't see a validation error
+    // over a setting that simply stopped doing anything.
     pollTimeoutSeconds: clampInt(get("SALT_POLL_TIMEOUT_SECONDS"), 2, 0, 2),
+    // Now the page size for the RARE backfill fetch a socket connection
+    // makes when Action Cable's own replay cap truncates the backlog (see
+    // socket.ts's header comment) -- not a poll batch size any more.
     pollLimit: clampInt(get("SALT_POLL_LIMIT"), 50, 1, 100),
     verifySignatures: boolSetting(runtime.getSetting("SALT_VERIFY_SIGNATURES"), true),
     autoReply: boolSetting(runtime.getSetting("SALT_AUTO_REPLY"), true),
     askHumanTimeoutSeconds: clampInt(get("SALT_ASK_HUMAN_TIMEOUT_SECONDS"), 300, 5, 3600),
-    // Where the poll cursor and delivery-id dedupe set persist across
-    // restarts (salt-agent-sdk's FileCursorStore/FileDedupeStore, see
-    // service.ts). Same process.cwd()-relative "data/" convention
+    // Where the resume cursor and delivery-id dedupe set persist across
+    // restarts/reconnects (salt-agent-sdk's FileCursorStore/FileDedupeStore,
+    // see service.ts). Same process.cwd()-relative "data/" convention
     // salt-agent-sdk's own identities.ts default uses, namespaced by this
     // identity's own appId so two characters run from the same directory
     // never share (or clobber) one another's cursor/dedupe files.
     stateDir: get("SALT_STATE_DIR") ?? path.join(process.cwd(), "data", "salt", appId || "default"),
+    subscriptionMode: parseSubscriptionMode(get("SALT_SUBSCRIPTION_MODE")),
+    subscriptionKeywords: (get("SALT_SUBSCRIPTION_KEYWORDS") ?? "")
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0),
   };
+}
+
+function parseSubscriptionMode(value: string | undefined): SaltSubscriptionMode | undefined {
+  if (!value) return undefined;
+  const lowered = value.toLowerCase();
+  if (lowered === "addressed" || lowered === "keywords" || lowered === "all") return lowered;
+  return undefined;
 }
 
 /** Returns the names of any required settings that are missing. */

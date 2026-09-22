@@ -1,12 +1,14 @@
 /**
- * The Salt connector service. Long-polls GET /api/v1/agent/updates (LANES.md's
- * socket-mode contract, K2) so this agent needs no public URL; verifies each
- * envelope's HMAC, PGP-decrypts message bodies, and drives the same
- * connector pattern plugin-matrix/plugin-discord use: ensureConnection, a
- * core Memory, and runtime.messageService.handleMessage with a
- * HandlerCallback that encrypts the reply for every current chat member and
- * posts it back. See README.md's "Custody" section: this process holds the
- * agent's PGP private key and can read everything it decrypts.
+ * The Salt connector service. Holds a live Action Cable websocket to
+ * salt-api (socket.ts) so this agent needs no public URL and never polls;
+ * verifies each envelope's HMAC, PGP-decrypts message bodies (or passes an
+ * open room's plaintext straight through), and drives the same connector
+ * pattern plugin-matrix/plugin-discord use: ensureConnection, a core
+ * Memory, and runtime.messageService.handleMessage with a HandlerCallback
+ * that encrypts the reply for every current chat member (or posts it
+ * plain, for an open room) and posts it back. See README.md's "Custody"
+ * section: this process holds the agent's PGP private key and can read
+ * everything it decrypts.
  */
 
 import {
@@ -29,8 +31,6 @@ import {
   FileDedupeStore,
   MemoryCursorStore,
   MemoryDedupeStore,
-  ACTIVE_POLL_DELAY_MS,
-  IDLE_POLL_DELAY_MS,
   type CursorStore,
   type DedupeStore,
   type SaltClient,
@@ -40,12 +40,14 @@ import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config";
 import {
   isGroupChat,
   looksLikePgpMessage,
+  parseDeliveredBecause,
   parseCardInteractionEventBody,
   parseChatOpenedEventBody,
   parseMessageEventBody,
 } from "./mapping";
-import { fetchAgentUpdates, setDeliveryMode } from "./rest";
+import { setDeliveryMode } from "./rest";
 import { verifyEnvelopeSignature } from "./signature";
+import { createSaltUpdatesSocket, type SaltSocket } from "./socket";
 import type {
   PendingCardWait,
   SaltCardTapResult,
@@ -56,19 +58,19 @@ import type {
 
 export const SALT_SOURCE = "salt";
 
-/** How long a signature-verification/decrypt failure or a transient poll
- *  error backs off before the next poll attempt. */
-const ERROR_BACKOFF_MS = 3000;
-
 export interface SaltServiceDeps {
   fetchImpl?: typeof fetch;
-  /** Override where the poll cursor persists (default: salt-agent-sdk's
+  /** Override where the resume cursor persists (default: salt-agent-sdk's
    *  FileCursorStore(saltConfig.stateDir), resolved once connect() knows
    *  the config). Tests pass MemoryCursorStore() to opt out of disk I/O. */
   cursorStore?: CursorStore;
   /** Override where processed delivery ids persist (default:
    *  FileDedupeStore(saltConfig.stateDir)). Same reasoning as cursorStore. */
   dedupeStore?: DedupeStore;
+  /** Override the WebSocket implementation socket.ts connects with
+   *  (default: `ws`'s own WebSocket). Tests pass a fake to drive Action
+   *  Cable frames without a real connection -- see socket.test.ts. */
+  webSocketImpl?: Parameters<typeof createSaltUpdatesSocket>[0]["webSocketImpl"];
 }
 
 export class SaltService extends Service {
@@ -81,8 +83,7 @@ export class SaltService extends Service {
   /** Not `private`: tests inject this directly rather than driving a full connect(). */
   webhookSecret: string | undefined;
   private running = false;
-  private cursor: number | string = 0;
-  /** Persists the poll cursor across restarts (salt-agent-sdk's
+  /** Persists the resume cursor across restarts/reconnects (salt-agent-sdk's
    *  FileCursorStore, keyed under saltConfig.stateDir) -- see connect().
    *  Not `private`: tests inject MemoryCursorStore() directly. */
   cursorStore: CursorStore = MemoryCursorStore();
@@ -90,8 +91,9 @@ export class SaltService extends Service {
    *  cursorStore -- a lost/never-loaded cursor used to replay up to 7 days
    *  of outbox on every restart and re-answer old messages (see HANDOFF.md). */
   dedupeStore: DedupeStore = MemoryDedupeStore();
-  private pollAbort: AbortController | undefined;
-  private loopPromise: Promise<void> | undefined;
+  /** The live Action Cable connection (socket.ts) -- not `private`: tests
+   *  may want to reach in, and stop() needs it. */
+  socket: SaltSocket | undefined;
   /** Public so action handlers (rest.ts helpers) reuse the same injected fetch in tests. */
   readonly fetchImpl: typeof fetch;
   private readonly deps: SaltServiceDeps;
@@ -147,69 +149,35 @@ export class SaltService extends Service {
       this.cursorStore = this.deps.cursorStore ?? FileCursorStore(this.saltConfig.stateDir);
       this.dedupeStore = this.deps.dedupeStore ?? FileDedupeStore(this.saltConfig.stateDir);
       this.running = true;
-      this.loopPromise = this.pollLoop();
+      // Owner rule (2026-09-22): "DO NOT USE POLLING as a mechanic EVER."
+      // This holds a live Action Cable websocket open (socket.ts) and pushes
+      // every envelope -- replayed backlog, then live -- through
+      // routeEnvelope, the exact same entry point the old poll loop used.
+      // No setInterval/sleep loop anywhere in this class any more; socket.ts's
+      // own timers are a ping watchdog and reconnect backoff only.
+      this.socket = createSaltUpdatesSocket({
+        host: this.saltConfig.host,
+        apiKey: this.saltConfig.apiKey,
+        agentId: this.saltConfig.appId,
+        cursorStore: this.cursorStore,
+        fetchImpl: this.fetchImpl,
+        backfillLimit: this.saltConfig.pollLimit,
+        webSocketImpl: this.deps.webSocketImpl,
+        onEnvelope: (envelope) => this.routeEnvelope(envelope),
+      });
+      this.socket.start();
     } else {
       throw new Error(
-        "plugin-saltapp: SALT_MODE=webhook is not implemented by this Service (it only runs the socket long-poll loop). Run salt-agent-sdk's createWebhookServer alongside this plugin instead, or set SALT_MODE=socket."
+        "plugin-saltapp: SALT_MODE=webhook is not implemented by this Service (it only runs the socket connection). Run salt-agent-sdk's createWebhookServer alongside this plugin instead, or set SALT_MODE=socket."
       );
     }
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    this.pollAbort?.abort();
     for (const waiter of this.cardWaiters.values()) clearTimeout(waiter.timer);
     this.cardWaiters.clear();
-    if (this.loopPromise) await this.loopPromise.catch(() => undefined);
-  }
-
-  // --- the long-poll loop ---------------------------------------------
-
-  private async pollLoop(): Promise<void> {
-    try {
-      this.cursor = await this.cursorStore.get(this.saltConfig.appId);
-    } catch (err) {
-      logger.warn(`plugin-saltapp: loading persisted cursor failed, starting from 0: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    let idleDelayMs: number = ACTIVE_POLL_DELAY_MS;
-    while (this.running) {
-      this.pollAbort = new AbortController();
-      try {
-        const res = await fetchAgentUpdates(this.fetchImpl, this.saltConfig.host, this.saltConfig.apiKey, {
-          after: this.cursor,
-          timeout: this.saltConfig.pollTimeoutSeconds,
-          limit: this.saltConfig.pollLimit,
-          signal: this.pollAbort.signal,
-        });
-        for (const envelope of res.updates) {
-          await this.routeEnvelope(envelope).catch((err) => {
-            logger.error(`plugin-saltapp: envelope ${envelope.id} (${envelope.event}) failed: ${err instanceof Error ? err.message : String(err)}`);
-          });
-        }
-        this.cursor = res.cursor;
-        try {
-          await this.cursorStore.put(this.saltConfig.appId, Number(this.cursor));
-        } catch (err) {
-          logger.warn(`plugin-saltapp: persisting cursor failed (will retry next cycle): ${err instanceof Error ? err.message : String(err)}`);
-        }
-        if (!this.running) return;
-        // Adaptive pacing (round-4 socket contract, LANES.md K2): salt-api's
-        // short-poll only ever blocks up to pollTimeoutSeconds (<=2s), so
-        // without a pause here an idle agent would hit the endpoint that
-        // often forever. Poll again soon right after real activity; back
-        // off one step at a time toward IDLE_POLL_DELAY_MS the longer
-        // nothing shows up, snapping back to ACTIVE_POLL_DELAY_MS the
-        // moment something does -- the same constants salt-agent-sdk's own
-        // createSocketClient uses, so a mixed fleet polls at one cadence.
-        idleDelayMs = res.updates.length > 0 ? ACTIVE_POLL_DELAY_MS : Math.min(idleDelayMs + ACTIVE_POLL_DELAY_MS, IDLE_POLL_DELAY_MS);
-        await sleep(idleDelayMs);
-      } catch (err) {
-        if (!this.running) return;
-        logger.warn(`plugin-saltapp: poll failed, retrying: ${err instanceof Error ? err.message : String(err)}`);
-        await sleep(ERROR_BACKOFF_MS);
-        idleDelayMs = ACTIVE_POLL_DELAY_MS; // resume at the active cadence once traffic is flowing again
-      }
-    }
+    if (this.socket) await this.socket.stop().catch(() => undefined);
   }
 
   /** Verifies the envelope's signature and skips an already-processed
@@ -243,7 +211,7 @@ export class SaltService extends Service {
   private async dispatchEnvelope(envelope: SaltUpdateEnvelope): Promise<void> {
     switch (envelope.event) {
       case "message":
-        return this.handleMessageEnvelope(envelope.body);
+        return this.handleMessageEnvelope(envelope.body, envelope.headers?.["X-Salt-Agent-Id"]);
       case "card_interaction":
         return this.handleCardInteractionEnvelope(envelope.body);
       case "chat_opened":
@@ -257,8 +225,14 @@ export class SaltService extends Service {
 
   // --- message events ---------------------------------------------------
 
-  /** Public for tests: parses, decrypts, and dispatches one "message" envelope body. */
-  async handleMessageEnvelope(rawBody: string): Promise<void> {
+  /** Public for tests: parses, decrypts (or passes plaintext straight
+   *  through, for an open room), and dispatches one "message" envelope
+   *  body. `headerAgentId` is the envelope's own X-Salt-Agent-Id header --
+   *  only consulted for an open-room delivery, where there is no
+   *  ciphertext to trial-decrypt against, so it's the only way to confirm
+   *  this delivery was meant for this identity (see salt-agent-sdk's
+   *  webhook.ts handleMessage for the same reasoning). */
+  async handleMessageEnvelope(rawBody: string, headerAgentId?: string): Promise<void> {
     const body = parseMessageEventBody(rawBody);
     const { chat, message } = body;
 
@@ -268,17 +242,33 @@ export class SaltService extends Service {
     if (String(message.user.id) === String(this.saltConfig.appId)) return;
     if (message.event_type) return;
 
-    const ciphertext = message.message;
-    if (!looksLikePgpMessage(ciphertext)) {
-      logger.debug(`plugin-saltapp: message ${message.message_id} has no decryptable ciphertext for this identity; skipping`);
-      return;
+    // Open rooms (salt-api 0.8x): a plain chat delivers `encrypted: false`
+    // and `message.message` is the text itself, not a PGP blob -- see
+    // README.md's "Open rooms" section. There is nothing to trial-decrypt,
+    // so the header naming this identity is the only confirmation this
+    // delivery was actually addressed here.
+    const isPlaintext = message.encrypted === false;
+    let text: string;
+    if (isPlaintext) {
+      if (headerAgentId && String(headerAgentId) !== String(this.saltConfig.appId)) {
+        logger.debug(`plugin-saltapp: plaintext message ${message.message_id} addressed to a different identity (${headerAgentId}); ignoring`);
+        return;
+      }
+      text = message.message;
+    } else {
+      const ciphertext = message.message;
+      if (!looksLikePgpMessage(ciphertext)) {
+        logger.debug(`plugin-saltapp: message ${message.message_id} has no decryptable ciphertext for this identity; skipping`);
+        return;
+      }
+      text = await decrypt(ciphertext, this.saltConfig.privateKey, this.saltConfig.passphrase);
     }
-    const text = await decrypt(ciphertext, this.saltConfig.privateKey, this.saltConfig.passphrase);
 
     const saltChatId = chat.id;
     const entityId = createUniqueUuid(this.runtime, message.user.id);
     const roomId = createUniqueUuid(this.runtime, saltChatId);
     const worldId = createUniqueUuid(this.runtime, saltChatId);
+    const deliveredBecause = parseDeliveredBecause(message.delivered_because);
 
     const cached = this.chatContext.get(roomId);
     const memberCount = cached?.members.length;
@@ -309,6 +299,18 @@ export class SaltService extends Service {
         text,
         source: SALT_SOURCE,
         channelType,
+        // Open rooms (see README.md): `encrypted: false` means this text
+        // came straight off the wire with no PGP decrypt attempted.
+        // `deliveredBecause` says why an open-room message was delivered
+        // to this identity at all ("mention" | "reply" | "keyword" | "all"
+        // -- see client.setChatSubscription) when Salt sends it; absent for
+        // an ordinary encrypted chat. parseDeliveredBecause narrows salt-api's
+        // raw string (confirmed against salt-agent-sdk 0.10.1's own
+        // MessageContext.deliveredBecause / DeliveredBecause) so an
+        // unrecognized future value degrades to "unknown reason" instead
+        // of lying about it here.
+        encrypted: !isPlaintext,
+        ...(deliveredBecause ? { deliveredBecause } : {}),
         ...(message.reply_to_message_id ? { inReplyTo: createUniqueUuid(this.runtime, String(message.reply_to_message_id)) } : {}),
       },
       createdAt: Date.parse(message.created_at) || Date.now(),
@@ -328,13 +330,13 @@ export class SaltService extends Service {
     const callback: HandlerCallback = async (response: Content) => {
       const replyText = typeof response.text === "string" ? response.text.trim() : "";
       if (!replyText) return [];
-      await this.sendChatMessage(saltChatId, replyText);
+      await this.sendChatMessage(saltChatId, replyText, isPlaintext);
       const outbound: Memory = {
         id: createUniqueUuid(this.runtime, `${saltChatId}:reply:${Date.now()}`),
         entityId: this.runtime.agentId,
         agentId: this.runtime.agentId,
         roomId,
-        content: { text: replyText, source: SALT_SOURCE, channelType, inReplyTo: coreMessage.id },
+        content: { text: replyText, source: SALT_SOURCE, channelType, encrypted: !isPlaintext, inReplyTo: coreMessage.id },
         createdAt: Date.now(),
       };
       await this.runtime.createMemory(outbound, "messages").catch((err) => logger.warn(`plugin-saltapp: persist outbound memory failed: ${err instanceof Error ? err.message : String(err)}`));
@@ -344,8 +346,20 @@ export class SaltService extends Service {
     await this.runtime.messageService.handleMessage(this.runtime, coreMessage, callback);
   }
 
-  /** Encrypts `text` for every current member (and this identity's own copy) and posts it. */
-  async sendChatMessage(saltChatId: string, text: string): Promise<void> {
+  /**
+   * Posts a reply into `saltChatId`. `plaintext` (default false) means this
+   * is an open room: `text` rides the wire and is stored as plain text, via
+   * `client.postPlainMessage` -- salt-api refuses a PGP-encrypted post
+   * against a plain chat and a plaintext post against an encrypted one the
+   * same way (see README.md's "Open rooms" section), so this never guesses.
+   * Otherwise encrypts `text` for every current member (and this identity's
+   * own copy) and posts it.
+   */
+  async sendChatMessage(saltChatId: string, text: string, plaintext = false): Promise<void> {
+    if (plaintext) {
+      await this.client.postPlainMessage(this.saltConfig.apiKey, saltChatId, text);
+      return;
+    }
     const members = await this.client.getChatMembers(this.saltConfig.apiKey, saltChatId);
     const others = members.filter((m) => String(m.id) !== String(this.saltConfig.appId) && !!m.public_key);
     const selfKey = members.find((m) => String(m.id) === String(this.saltConfig.appId))?.public_key ?? this.saltConfig.publicKey;
@@ -436,6 +450,27 @@ export class SaltService extends Service {
       pendingRequests: this.chatContext.get(roomId)?.pendingRequests ?? [],
       updatedAt: Date.now(),
     });
+
+    // Interests (open rooms, salt-api 0.8x): declares what this identity
+    // wants delivered from a room it isn't necessarily @mentioned in every
+    // time -- "keywords" (follow SALT_SUBSCRIPTION_KEYWORDS) or "all"
+    // (every message). Only meaningful for a plain chat (an encrypted chat
+    // already gates delivery server-side the same way "addressed" does),
+    // and only when this character actually configured a non-default
+    // preference -- see config.ts's loadSaltPluginConfig. Applied the
+    // moment this identity is added to a room rather than once at service
+    // start, since that's the only point this plugin learns a given room
+    // exists at all.
+    if (this.saltConfig.subscriptionMode && this.saltConfig.subscriptionMode !== "addressed" && body.chat.encrypted === false) {
+      try {
+        await this.client.setChatSubscription(this.saltConfig.apiKey, saltChatId, {
+          mode: this.saltConfig.subscriptionMode,
+          keywords: this.saltConfig.subscriptionKeywords,
+        });
+      } catch (err) {
+        logger.warn(`plugin-saltapp: setChatSubscription for ${saltChatId} failed (continuing; this identity keeps its default delivery): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   // --- shared chat-context cache -----------------------------------------
@@ -458,8 +493,4 @@ export class SaltService extends Service {
       logger.warn(`plugin-saltapp: could not refresh chat members for ${saltChatId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

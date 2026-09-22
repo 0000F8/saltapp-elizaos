@@ -5,6 +5,7 @@ import {
   looksLikePgpMessage,
   parseCardInteractionEventBody,
   parseChatOpenedEventBody,
+  parseDeliveredBecause,
   parseMessageEventBody,
 } from "../mapping";
 
@@ -102,5 +103,21 @@ describe("isGroupChat", () => {
   });
   it("defaults unknown member counts to a group (the safer gate)", () => {
     expect(isGroupChat(undefined)).toBe(true);
+  });
+});
+
+describe("parseDeliveredBecause", () => {
+  it("accepts every known value", () => {
+    for (const v of ["mention", "reply", "keyword", "all"]) {
+      expect(parseDeliveredBecause(v)).toBe(v);
+    }
+  });
+  it("narrows an unrecognized string to undefined", () => {
+    expect(parseDeliveredBecause("some-future-kind")).toBeUndefined();
+  });
+  it("narrows a missing/non-string value to undefined", () => {
+    expect(parseDeliveredBecause(undefined)).toBeUndefined();
+    expect(parseDeliveredBecause(null)).toBeUndefined();
+    expect(parseDeliveredBecause(42)).toBeUndefined();
   });
 });

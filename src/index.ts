@@ -22,6 +22,7 @@ export * from "./money";
 export * from "./rest";
 export * from "./service";
 export * from "./signature";
+export * from "./socket";
 export * from "./types";
 export * from "./actions";
 export * from "./providers";

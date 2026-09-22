@@ -1,12 +1,13 @@
 /**
  * Pure parsing of the JSON bodies salt-api's webhook jobs (and the
- * equivalent socket-mode outbox rows) send -- no crypto, no runtime, no I/O,
- * so message-shape regressions show up as unit-test failures instead of a
- * silent drop in the poll loop. See types.ts for the field-level contract
- * and CLAUDE.md's Message#formatted_message / WebhookJob#user_send for the
- * source of truth this mirrors.
+ * equivalent socket-mode envelope frames) send -- no crypto, no runtime,
+ * no I/O, so message-shape regressions show up as unit-test failures
+ * instead of a silent drop in socket.ts's connection. See types.ts for the
+ * field-level contract and CLAUDE.md's Message#formatted_message /
+ * WebhookJob#user_send for the source of truth this mirrors.
  */
 
+import type { DeliveredBecause } from "salt-agent-sdk";
 import type {
   SaltCardInteractionEventBody,
   SaltChatOpenedEventBody,
@@ -55,6 +56,23 @@ export function parseChatOpenedEventBody(body: string): SaltChatOpenedEventBody 
 /** True when `text` starts with an armored PGP message block. */
 export function looksLikePgpMessage(text: string | null | undefined): boolean {
   return typeof text === "string" && text.startsWith("-----BEGIN PGP MESSAGE");
+}
+
+/** salt-api's `message.delivered_because` values -- confirmed against
+ *  salt-agent-sdk 0.10.1's own `DeliveredBecause`/`parseDeliveredBecause`
+ *  (webhook.ts), which this mirrors. */
+const DELIVERED_BECAUSE_VALUES = new Set(["mention", "reply", "keyword", "all"]);
+
+/**
+ * Narrows salt-api's `message.delivered_because` (a plain string, only
+ * ever present on an open-room delivery) to the known union -- anything
+ * else (missing, or a value this plugin's copy of the union doesn't
+ * recognise yet) becomes undefined rather than an unchecked pass-through,
+ * so a future kind added server-side degrades to "unknown reason" instead
+ * of lying about it in a Memory's content.
+ */
+export function parseDeliveredBecause(raw: unknown): DeliveredBecause | undefined {
+  return typeof raw === "string" && DELIVERED_BECAUSE_VALUES.has(raw) ? (raw as DeliveredBecause) : undefined;
 }
 
 /**
