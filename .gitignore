@@ -12,3 +12,8 @@ package-lock.json
 !.env.example
 coverage/
 .DS_Store
+# Default SALT_STATE_DIR (socket-mode poll cursor/dedupe persistence, see
+# config.ts) -- runtime state, never source. A test that doesn't inject
+# MemoryCursorStore()/MemoryDedupeStore() into SaltServiceDeps would
+# otherwise write real files here.
+/data/
