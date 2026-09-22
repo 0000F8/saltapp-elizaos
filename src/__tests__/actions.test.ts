@@ -23,6 +23,7 @@ function baseConfig(overrides: Partial<SaltPluginConfig> = {}): SaltPluginConfig
     autoReply: true,
     askHumanTimeoutSeconds: 5,
     stateDir: "/tmp/saltapp-elizaos-test-state",
+    subscriptionKeywords: [],
     ...overrides,
   };
 }

@@ -49,7 +49,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "salt-agent-sdk": "^0.8.0"
+    "salt-agent-sdk": "^0.10.0",
+    "ws": "^8.21.3"
   },
   "peerDependencies": {
     "@elizaos/core": ">=1.0.0"
@@ -57,6 +58,7 @@
   "devDependencies": {
     "@elizaos/core": "^1.7.2",
     "@types/node": "^20.19.43",
+    "@types/ws": "^8.5.13",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   },
@@ -108,7 +110,7 @@
       },
       "SALT_MODE": {
         "type": "string",
-        "description": "\"socket\" (long-poll GET /api/v1/agent/updates, works with no public URL) or \"webhook\" (this process registers a callback and receives pushed HTTP POSTs). Socket is the default and needs no inbound networking.",
+        "description": "\"socket\" (a live Action Cable websocket -- salt-api pushes every update the instant it's written, no public URL needed, never polls) or \"webhook\" (this process registers a callback and receives pushed HTTP POSTs). Socket is the default and needs no inbound networking.",
         "required": false,
         "sensitive": false,
         "defaultValue": "socket"
@@ -128,14 +130,14 @@
       },
       "SALT_POLL_TIMEOUT_SECONDS": {
         "type": "number",
-        "description": "Short-poll wait time per request to GET /api/v1/agent/updates, clamped server-side to 0-2s (round-4 socket contract: Action Cable is the real push path, this is only the adaptive fallback/catch-up poll).",
+        "description": "Unused since the 2026-09-22 Action Cable transport swap (this service no longer polls) -- kept only so a host that already set it doesn't see a validation error.",
         "required": false,
         "sensitive": false,
         "defaultValue": "2"
       },
       "SALT_POLL_LIMIT": {
         "type": "number",
-        "description": "Max updates to fetch per long-poll request (1-100).",
+        "description": "Page size for the rare backfill fetch a socket connection makes when Action Cable's own replay cap truncates the backlog (1-100). Not a poll batch size any more.",
         "required": false,
         "sensitive": false,
         "defaultValue": "50"
@@ -160,6 +162,19 @@
         "required": false,
         "sensitive": false,
         "defaultValue": "300"
+      },
+      "SALT_SUBSCRIPTION_MODE": {
+        "type": "string",
+        "description": "Open rooms: what this identity wants delivered from a plain (unencrypted) chat it isn't necessarily @mentioned in every message of -- \"addressed\" (the default: only a direct reply/@mention, and the one mode that never calls the subscription API), \"keywords\" (any message containing one of SALT_SUBSCRIPTION_KEYWORDS), or \"all\" (every message). No effect on an ordinary encrypted chat.",
+        "required": false,
+        "sensitive": false,
+        "defaultValue": "addressed"
+      },
+      "SALT_SUBSCRIPTION_KEYWORDS": {
+        "type": "string",
+        "description": "Comma-separated keywords this identity follows in an open room when SALT_SUBSCRIPTION_MODE=keywords, e.g. \"weather,price,help\".",
+        "required": false,
+        "sensitive": false
       }
     },
     "configUiHints": {
@@ -208,6 +223,17 @@
         "order": 12,
         "group": "behavior"
       },
+      "SALT_SUBSCRIPTION_MODE": {
+        "label": "Open-room subscription",
+        "order": 13,
+        "group": "behavior"
+      },
+      "SALT_SUBSCRIPTION_KEYWORDS": {
+        "label": "Open-room keywords",
+        "order": 14,
+        "group": "behavior",
+        "requires": "SALT_SUBSCRIPTION_MODE"
+      },
       "SALT_VERIFY_SIGNATURES": {
         "label": "Verify signatures",
         "order": 20,
@@ -215,13 +241,13 @@
         "advanced": true
       },
       "SALT_POLL_TIMEOUT_SECONDS": {
-        "label": "Poll timeout (s)",
+        "label": "Poll timeout (s) -- unused",
         "order": 21,
         "group": "advanced",
         "advanced": true
       },
       "SALT_POLL_LIMIT": {
-        "label": "Poll batch limit",
+        "label": "Backfill page size",
         "order": 22,
         "group": "advanced",
         "advanced": true

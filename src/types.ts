@@ -9,6 +9,15 @@
 
 export type SaltDeliveryMode = "socket" | "webhook";
 
+/** Open rooms (salt-api 0.8x): what this identity wants delivered from a
+ *  plain chat it isn't necessarily @mentioned in every message of --
+ *  "addressed" (only a direct reply/@mention, the closest analogue to how
+ *  an encrypted chat already gates delivery -- the default, and the one
+ *  mode that never calls client.setChatSubscription at all), "keywords"
+ *  (any message containing one of SALT_SUBSCRIPTION_KEYWORDS), or "all"
+ *  (every message). See client.setChatSubscription in salt-agent-sdk. */
+export type SaltSubscriptionMode = "addressed" | "keywords" | "all";
+
 /** Resolved plugin configuration, read from character/runtime settings (see config.ts). */
 export interface SaltPluginConfig {
   host: string;
@@ -25,9 +34,17 @@ export interface SaltPluginConfig {
   verifySignatures: boolean;
   autoReply: boolean;
   askHumanTimeoutSeconds: number;
-  /** Directory the poll cursor and delivery-id dedupe set are persisted in
+  /** Directory the resume cursor and delivery-id dedupe set are persisted in
    *  (salt-agent-sdk's FileCursorStore/FileDedupeStore -- see service.ts). */
   stateDir: string;
+  /** Open rooms: this identity's own subscription preference, applied via
+   *  client.setChatSubscription whenever it's newly added to a plain chat
+   *  (see service.ts's handleChatOpenedEnvelope). Undefined means "never
+   *  call setChatSubscription" -- the same effective behavior as
+   *  "addressed", just without the extra API call. */
+  subscriptionMode?: SaltSubscriptionMode;
+  /** Keywords this identity follows when subscriptionMode is "keywords". */
+  subscriptionKeywords: string[];
 }
 
 /** One row from GET /api/v1/agent/updates. `headers` carries the exact
@@ -70,6 +87,10 @@ export interface SaltChatMeta {
   coaching_for_chat_id?: string;
   private_lane?: boolean;
   lane_kind?: string;
+  /** Open rooms (salt-api 0.8x): false marks a plain chat with no
+   *  end-to-end encryption -- see README.md's "Open rooms" section.
+   *  Absent (or true) is an ordinary encrypted chat. */
+  encrypted?: boolean;
 }
 
 export interface SaltMessageUser {
@@ -101,6 +122,15 @@ export interface SaltFormattedMessage {
   delegations?: Array<{ agent_id: string; chat_id: string; username: string }>;
   coaching_for_chat_id?: string;
   quiet?: boolean;
+  /** Open rooms: false means `message` is plain text, not a PGP blob --
+   *  see SaltChatMeta.encrypted and README.md's "Open rooms" section. */
+  encrypted?: boolean;
+  /** Interests: why this open-room message was delivered to this identity
+   *  (see client.setChatSubscription's `mode`). Absent for an ordinary
+   *  encrypted chat, and absent until salt-api's open-rooms rollout starts
+   *  sending it on the wire -- not yet in salt-agent-sdk 0.10.0's own typed
+   *  MessageContext as of this writing, so this is read defensively. */
+  delivered_because?: "mention" | "reply" | "keyword" | "all" | string;
   deleted_at?: string | null;
   deleted_by?: unknown;
   locked_at?: string | null;
