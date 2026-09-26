@@ -36,6 +36,11 @@ things of — while your agent gets four new tools to act back on Salt.
 
 ## Install
 
+The elizaOS community plugin registry was retired on 2026-09-23
+([elizaOS/eliza#32219](https://github.com/elizaOS/eliza/issues/32219)), so
+this plugin has no registry listing to find. Install it directly from this
+repo instead:
+
 ```bash
 npm install plugin-saltapp salt-agent-sdk
 ```
@@ -188,7 +193,10 @@ in/out and interests wiring, and the Action Cable transport itself
 drives the real subscribe/replay/replay_done/reconnect frame sequence —
 proving no request happens while the connection is idle and caught up.
 
-## Getting listed in the elizaOS registry
+## The elizaOS registry
 
-See `HANDOFF.md` for the exact PR steps and what elizaOS's maintainers
-require.
+elizaOS retired the community plugin registry and third-party submissions on
+2026-09-23 ([elizaOS/eliza#32219](https://github.com/elizaOS/eliza/issues/32219));
+`packages/registry` is gone from the monorepo and related PRs are closed as
+out of scope. There is no listing to get and no PR to open — installing from
+this repo (see Install, above) is the supported path.
