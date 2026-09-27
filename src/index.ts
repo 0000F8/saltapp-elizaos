@@ -11,21 +11,21 @@
  */
 
 import type { Plugin } from "@elizaos/core";
-import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config";
-import { SaltService } from "./service";
-import { saltActions } from "./actions";
-import { saltProviders } from "./providers";
+import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config.js";
+import { SaltService } from "./service.js";
+import { saltActions } from "./actions/index.js";
+import { saltProviders } from "./providers/index.js";
 
-export * from "./config";
-export * from "./mapping";
-export * from "./money";
-export * from "./rest";
-export * from "./service";
-export * from "./signature";
-export * from "./socket";
-export * from "./types";
-export * from "./actions";
-export * from "./providers";
+export * from "./config.js";
+export * from "./mapping.js";
+export * from "./money.js";
+export * from "./rest.js";
+export * from "./service.js";
+export * from "./signature.js";
+export * from "./socket.js";
+export * from "./types.js";
+export * from "./actions/index.js";
+export * from "./providers/index.js";
 
 export const saltappPlugin: Plugin = {
   name: "plugin-saltapp",

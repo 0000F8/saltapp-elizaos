@@ -7,7 +7,7 @@
  */
 
 import type { IAgentRuntime, Memory, Provider, ProviderResult, State } from "@elizaos/core";
-import { SaltService } from "../service";
+import { SaltService } from "../service.js";
 
 export const saltChatContextProvider: Provider = {
   name: "SALT_CHAT_CONTEXT",

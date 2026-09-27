@@ -12,7 +12,7 @@ import type {
   SaltCardInteractionEventBody,
   SaltChatOpenedEventBody,
   SaltMessageEventBody,
-} from "./types";
+} from "./types.js";
 
 export class SaltEnvelopeParseError extends Error {
   constructor(event: string, cause: unknown) {

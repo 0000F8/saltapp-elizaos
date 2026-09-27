@@ -9,7 +9,7 @@
  */
 
 import type { SaltClient, SaltUser } from "salt-agent-sdk";
-import type { SaltUpdatesResponse } from "./types";
+import type { SaltUpdatesResponse } from "./types.js";
 
 export class SaltPluginRestError extends Error {
   status: number;

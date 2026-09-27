@@ -1,4 +1,4 @@
-export * from "./chatContext";
-import { saltChatContextProvider } from "./chatContext";
+export * from "./chatContext.js";
+import { saltChatContextProvider } from "./chatContext.js";
 
 export const saltProviders = [saltChatContextProvider];

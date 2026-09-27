@@ -8,10 +8,10 @@
  */
 
 import type { Action, ActionResult, HandlerCallback, IAgentRuntime, Memory, State } from "@elizaos/core";
-import { resolveReceiver, resolveWallet, type SaltWallet } from "../rest";
-import { extractActionParams } from "./extract";
-import { multiplyDecimalByInt } from "../money";
-import { loadChatMembers, resolveSaltRoom } from "./shared";
+import { resolveReceiver, resolveWallet, type SaltWallet } from "../rest.js";
+import { extractActionParams } from "./extract.js";
+import { multiplyDecimalByInt } from "../money.js";
+import { loadChatMembers, resolveSaltRoom } from "./shared.js";
 
 export const saltSendInvoiceAction: Action = {
   name: "SALT_SEND_INVOICE",

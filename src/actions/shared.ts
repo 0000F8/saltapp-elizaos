@@ -9,7 +9,7 @@
 
 import type { IAgentRuntime, Memory } from "@elizaos/core";
 import type { SaltUser } from "salt-agent-sdk";
-import { SaltService, SALT_SOURCE } from "../service";
+import { SaltService, SALT_SOURCE } from "../service.js";
 
 export interface SaltActionRoom {
   service: SaltService;
