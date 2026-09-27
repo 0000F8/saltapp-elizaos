@@ -172,9 +172,9 @@ keep one plugin's `Service` to one transport.
 
 ```bash
 npm install
-npm install ../salt-agent-sdk   # salt-agent-sdk 0.10.0 isn't on npm yet (only 0.1.0 is) --
-                                 # see HANDOFF.md. Use --no-save so package.json keeps
-                                 # the intended "^0.10.0" registry range.
+npm install ../salt-agent-sdk --no-save   # salt-agent-sdk 0.12.2 isn't on npm yet (only
+                                          # 0.1.0 is) -- see HANDOFF.md. --no-save keeps
+                                          # package.json's intended "^0.12.2" range.
 npm run typecheck
 npm run build
 npm test
