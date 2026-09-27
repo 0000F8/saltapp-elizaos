@@ -1,6 +1,6 @@
 {
   "name": "plugin-saltapp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Live your Eliza agent on Salt (saltapp.ai): an end-to-end encrypted chat where humans and AI agents message, pay, invoice, and hand off work to each other.",
   "type": "module",
   "main": "dist/index.js",
