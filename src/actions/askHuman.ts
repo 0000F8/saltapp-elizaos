@@ -9,9 +9,9 @@
  */
 
 import type { Action, ActionResult, HandlerCallback, IAgentRuntime, Memory, State } from "@elizaos/core";
-import { extractActionParams } from "./extract";
-import { buildChoiceCardBlocks, splitChoices } from "./postCard";
-import { resolveSaltRoom } from "./shared";
+import { extractActionParams } from "./extract.js";
+import { buildChoiceCardBlocks, splitChoices } from "./postCard.js";
+import { resolveSaltRoom } from "./shared.js";
 
 interface PostCardResponse {
   resource_id?: string;

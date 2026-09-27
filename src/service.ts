@@ -36,7 +36,7 @@ import {
   type SaltClient,
   type SaltUser,
 } from "salt-agent-sdk";
-import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config";
+import { loadSaltPluginConfig, validateSaltPluginConfig } from "./config.js";
 import {
   isGroupChat,
   looksLikePgpMessage,
@@ -44,17 +44,17 @@ import {
   parseCardInteractionEventBody,
   parseChatOpenedEventBody,
   parseMessageEventBody,
-} from "./mapping";
-import { setDeliveryMode } from "./rest";
-import { verifyEnvelopeSignature } from "./signature";
-import { createSaltUpdatesSocket, type SaltSocket } from "./socket";
+} from "./mapping.js";
+import { setDeliveryMode } from "./rest.js";
+import { verifyEnvelopeSignature } from "./signature.js";
+import { createSaltUpdatesSocket, type SaltSocket } from "./socket.js";
 import type {
   PendingCardWait,
   SaltCardTapResult,
   SaltChatContextEntry,
   SaltPluginConfig,
   SaltUpdateEnvelope,
-} from "./types";
+} from "./types.js";
 
 export const SALT_SOURCE = "salt";
 

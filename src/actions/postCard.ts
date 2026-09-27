@@ -8,8 +8,8 @@
 
 import type { Action, ActionResult, HandlerCallback, IAgentRuntime, Memory, State } from "@elizaos/core";
 import type { CardBlock } from "salt-agent-sdk";
-import { extractActionParams } from "./extract";
-import { resolveSaltRoom } from "./shared";
+import { extractActionParams } from "./extract.js";
+import { resolveSaltRoom } from "./shared.js";
 
 /** action_id must be a-z0-9_- and <=40 chars, unique within the card
  *  (CARD_PROTOCOL_SPEC.md's block vocabulary). */

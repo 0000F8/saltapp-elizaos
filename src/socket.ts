@@ -50,8 +50,8 @@
 
 import { RECONNECT_MAX_DELAY_MS, RECONNECT_MIN_DELAY_MS, PING_TIMEOUT_MS, type CursorStore } from "salt-agent-sdk";
 import { WebSocket as WS, type RawData } from "ws";
-import { fetchAgentUpdates } from "./rest";
-import type { SaltUpdateEnvelope } from "./types";
+import { fetchAgentUpdates } from "./rest.js";
+import type { SaltUpdateEnvelope } from "./types.js";
 
 export interface SaltSocketLogger {
   info(msg: string): void;

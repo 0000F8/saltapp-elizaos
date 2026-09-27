@@ -8,7 +8,7 @@
 
 import * as path from "node:path";
 import type { IAgentRuntime } from "@elizaos/core";
-import type { SaltDeliveryMode, SaltPluginConfig, SaltSubscriptionMode } from "./types";
+import type { SaltDeliveryMode, SaltPluginConfig, SaltSubscriptionMode } from "./types.js";
 
 function clampInt(value: string | undefined, fallback: number, min: number, max: number): number {
   const n = value === undefined ? Number.NaN : Number.parseInt(value, 10);

@@ -1,11 +1,11 @@
-export * from "./requestPayment";
-export * from "./sendInvoice";
-export * from "./postCard";
-export * from "./askHuman";
+export * from "./requestPayment.js";
+export * from "./sendInvoice.js";
+export * from "./postCard.js";
+export * from "./askHuman.js";
 
-import { saltRequestPaymentAction } from "./requestPayment";
-import { saltSendInvoiceAction } from "./sendInvoice";
-import { saltPostCardAction } from "./postCard";
-import { saltAskHumanAction } from "./askHuman";
+import { saltRequestPaymentAction } from "./requestPayment.js";
+import { saltSendInvoiceAction } from "./sendInvoice.js";
+import { saltPostCardAction } from "./postCard.js";
+import { saltAskHumanAction } from "./askHuman.js";
 
 export const saltActions = [saltRequestPaymentAction, saltSendInvoiceAction, saltPostCardAction, saltAskHumanAction];

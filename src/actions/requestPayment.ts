@@ -8,9 +8,9 @@
  */
 
 import type { Action, ActionResult, HandlerCallback, IAgentRuntime, Memory, State } from "@elizaos/core";
-import { createPaymentRequest, resolveReceiver, resolveWallet, type SaltWallet } from "../rest";
-import { extractActionParams } from "./extract";
-import { loadChatMembers, resolveSaltRoom } from "./shared";
+import { createPaymentRequest, resolveReceiver, resolveWallet, type SaltWallet } from "../rest.js";
+import { extractActionParams } from "./extract.js";
+import { loadChatMembers, resolveSaltRoom } from "./shared.js";
 
 export const saltRequestPaymentAction: Action = {
   name: "SALT_REQUEST_PAYMENT",
